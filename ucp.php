@@ -1,17 +1,19 @@
 <?php
 /**
 *
-* @package ucp
-* @version $Id$
-* @copyright (c) 2005 phpBB Group
-* @license http://opensource.org/licenses/gpl-license.php GNU Public License
+* This file is part of the phpBB Forum Software package.
+*
+* @copyright (c) phpBB Limited <https://www.phpbb.com>
+* @license GNU General Public License, version 2 (GPL-2.0)
+*
+* For full copyright and license information, please see
+* the docs/CREDITS.txt file.
 *
 */
 
 /**
 * @ignore
 */
-
 define('IN_PHPBB', true);
 $phpbb_root_path = (defined('PHPBB_ROOT_PATH')) ? PHPBB_ROOT_PATH : './';
 $phpEx = substr(strrchr(__FILE__, '.'), 1);
@@ -20,10 +22,10 @@ require($phpbb_root_path . 'includes/functions_user.' . $phpEx);
 require($phpbb_root_path . 'includes/functions_module.' . $phpEx);
 
 // Basic parameter data
-$id 	= request_var('i', '');
-$mode	= request_var('mode', '');
+$id 	= $request->variable('i', '');
+$mode	= $request->variable('mode', '');
 
-if (in_array($mode, array('login', 'logout', 'confirm', 'sendpassword', 'activate')))
+if (in_array($mode, array('login', 'login_link', 'logout', 'confirm', 'sendpassword', 'activate')))
 {
 	define('IN_LOGIN', true);
 }
@@ -35,13 +37,6 @@ $user->setup('ucp');
 
 // Setting a variable to let the style designer know where he is...
 $template->assign_var('S_IN_UCP', true);
-
-// Search PM-folders
-// Include the functions here if there is some marked actions
-if(isset($_POST['in_pm_search']))
-{
-	include($phpbb_root_path . 'includes/pm_search/functions_pm_search.' . $phpEx);
-}
 
 $module = new p_master();
 $default = false;
@@ -67,11 +62,11 @@ switch ($mode)
 	break;
 
 	case 'register':
-		
 		if ($user->data['is_registered'] || isset($_REQUEST['not_agreed']))
 		{
 			redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 		}
+
 		$module->load('ucp', 'register');
 		$module->display($user->lang['REGISTER']);
 	break;
@@ -86,25 +81,33 @@ switch ($mode)
 			redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 		}
 
-		login_box(request_var('redirect', "index.$phpEx"));
+		login_box($request->variable('redirect', "index.$phpEx"));
+	break;
+
+	case 'login_link':
+		if ($user->data['is_registered'])
+		{
+			redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
+		}
+
+		$module->load('ucp', 'login_link');
+		$module->display($user->lang['UCP_LOGIN_LINK']);
 	break;
 
 	case 'logout':
-		if ($user->data['user_id'] != ANONYMOUS && isset($_GET['sid']) && !is_array($_GET['sid']) && $_GET['sid'] === $user->session_id)
+		if ($user->data['user_id'] != ANONYMOUS && $request->is_set('sid') && $request->variable('sid', '') === $user->session_id)
 		{
 			$user->session_kill();
-			$user->session_begin();
-			$message = $user->lang['LOGOUT_REDIRECT'];
 		}
-		else
+		else if ($user->data['user_id'] != ANONYMOUS)
 		{
-			$message = ($user->data['user_id'] == ANONYMOUS) ? $user->lang['LOGOUT_REDIRECT'] : $user->lang['LOGOUT_FAILED'];
+			meta_refresh(3, append_sid("{$phpbb_root_path}index.$phpEx"));
+
+			$message = $user->lang['LOGOUT_FAILED'] . '<br /><br />' . sprintf($user->lang['RETURN_INDEX'], '<a href="' . append_sid("{$phpbb_root_path}index.$phpEx") . '">', '</a> ');
+			trigger_error($message);
 		}
-		meta_refresh(3, append_sid("{$phpbb_root_path}index.$phpEx"));
 
-		$message = $message . '<br /><br />' . sprintf($user->lang['RETURN_INDEX'], '<a href="' . append_sid("{$phpbb_root_path}index.$phpEx") . '">', '</a> ');
-		trigger_error($message);
-
+		redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 	break;
 
 	case 'terms':
@@ -128,7 +131,7 @@ switch ($mode)
 		);
 
 		// Disable online list
-		page_header($user->lang[$title], false);
+		page_header($user->lang[$title]);
 
 		$template->assign_vars(array(
 			'S_AGREEMENT'			=> true,
@@ -149,8 +152,10 @@ switch ($mode)
 		{
 			$set_time = time() - 31536000;
 
-			foreach ($_COOKIE as $cookie_name => $cookie_data)
+			foreach ($request->variable_names(\phpbb\request\request_interface::COOKIE) as $cookie_name)
 			{
+				$cookie_data = $request->variable($cookie_name, '', true, \phpbb\request\request_interface::COOKIE);
+
 				// Only delete board cookies, no other ones...
 				if (strpos($cookie_name, $config['cookie_name'] . '_') !== 0)
 				{
@@ -158,6 +163,22 @@ switch ($mode)
 				}
 
 				$cookie_name = str_replace($config['cookie_name'] . '_', '', $cookie_name);
+
+				/**
+				* Event to save custom cookies from deletion
+				*
+				* @event core.ucp_delete_cookies
+				* @var	string	cookie_name		Cookie name to checking
+				* @var	bool	retain_cookie	Do we retain our cookie or not, true if retain
+				* @since 3.1.3-RC1
+				*/
+				$retain_cookie = false;
+				$vars = array('cookie_name', 'retain_cookie');
+				extract($phpbb_dispatcher->trigger_event('core.ucp_delete_cookies', compact($vars)));
+				if ($retain_cookie)
+				{
+					continue;
+				}
 
 				// Polls are stored as {cookie_name}_poll_{topic_id}, cookie_name_ got removed, therefore checking for poll_
 				if (strpos($cookie_name, 'poll_') !== 0)
@@ -191,7 +212,7 @@ switch ($mode)
 
 	case 'switch_perm':
 
-		$user_id = request_var('u', 0);
+		$user_id = $request->variable('u', 0);
 
 		$sql = 'SELECT *
 			FROM ' . USERS_TABLE . '
@@ -200,7 +221,7 @@ switch ($mode)
 		$user_row = $db->sql_fetchrow($result);
 		$db->sql_freeresult($result);
 
-		if (!$auth->acl_get('a_switchperm') || !$user_row || $user_id == $user->data['user_id'] || !check_link_hash(request_var('hash', ''), 'switchperm'))
+		if (!$auth->acl_get('a_switchperm') || !$user_row || $user_id == $user->data['user_id'] || !check_link_hash($request->variable('hash', ''), 'switchperm'))
 		{
 			redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 		}
@@ -213,9 +234,22 @@ switch ($mode)
 			redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 		}
 
-		add_log('admin', 'LOG_ACL_TRANSFER_PERMISSIONS', $user_row['username']);
+		$phpbb_log->add('admin', $user->data['user_id'], $user->ip, 'LOG_ACL_TRANSFER_PERMISSIONS', false, array($user_row['username']));
 
 		$message = sprintf($user->lang['PERMISSIONS_TRANSFERRED'], $user_row['username']) . '<br /><br />' . sprintf($user->lang['RETURN_INDEX'], '<a href="' . append_sid("{$phpbb_root_path}index.$phpEx") . '">', '</a>');
+
+		/**
+		* Event to run code after permissions are switched
+		*
+		* @event core.ucp_switch_permissions
+		* @var	int		user_id		User ID to switch permission to
+		* @var	array	user_row	User data
+		* @var	string	message		Success message
+		* @since 3.1.11-RC1
+		*/
+		$vars = array('user_id', 'user_row', 'message');
+		extract($phpbb_dispatcher->trigger_event('core.ucp_switch_permissions', compact($vars)));
+
 		trigger_error($message);
 
 	break;
@@ -236,68 +270,25 @@ switch ($mode)
 		$username = $db->sql_fetchfield('username');
 		$db->sql_freeresult($result);
 
-		add_log('admin', 'LOG_ACL_RESTORE_PERMISSIONS', $username);
+		$phpbb_log->add('admin', $user->data['user_id'], $user->ip, 'LOG_ACL_RESTORE_PERMISSIONS', false, array($username));
 
 		$message = $user->lang['PERMISSIONS_RESTORED'] . '<br /><br />' . sprintf($user->lang['RETURN_INDEX'], '<a href="' . append_sid("{$phpbb_root_path}index.$phpEx") . '">', '</a>');
+
+		/**
+		* Event to run code after permissions are restored
+		*
+		* @event core.ucp_restore_permissions
+		* @var	string	username	User name
+		* @var	string	message		Success message
+		* @since 3.1.11-RC1
+		*/
+		$vars = array('username', 'message');
+		extract($phpbb_dispatcher->trigger_event('core.ucp_restore_permissions', compact($vars)));
+
 		trigger_error($message);
 
 	break;
 
-	
-	//Alt Switching Case
-	case 'switch':
-		$new_id = request_var('alt_select', 0);
-
-		if($config['allow_account_switching'] && $new_id != 0 && $user->data['user_id'] != ANONYMOUS)
-		{
-			$userAltData = UserAltData::getAlts($user->data['user_id']);
-			$alts = $userAltData->getAllAlts();
-			
-			if(in_array($new_id, $alts)) {
-				
-				//This is a legit alt.
-				
-				$sql = 'SELECT username
-						FROM ' . USERS_TABLE . '
-						WHERE user_id=' . $new_id;
-				
-				$resultSet = $db->sql_query($sql);
-				
-				$row = $db->sql_fetchrow($resultSet);
-				$username = $row['username'];
-				
-				$db->sql_freeresult($result);
-				
-				$user->session_kill();
-				$stat = $auth->login($username, NULL, false, 1, 0, true);
-				
-				if ($stat['status'] == LOGIN_SUCCESS)
-				{
-					redirect("{$phpbb_root_path}index.$phpEx");
-				}
-				else {
-					
-					echo("Login Failed");
-					exit;
-				}
-				
-							// Special case... the user is effectively banned, but we allow founders to login
-				if (defined('IN_CHECK_BAN') && $result['user_row']['user_type'] != USER_FOUNDER)
-				{
-					return;
-				}
-
-				$redirect = meta_refresh(3, $redirect);
-				trigger_error($message . '<br /><br />' . sprintf($l_redirect, '<a href="' . $redirect . '">', '</a>'));
-			}
-			else {
-				//Not a legit alt.
-			}
-		}
-		else {
-		}
-
-	break;
 	default:
 		$default = true;
 	break;
@@ -317,6 +308,12 @@ if (!$user->data['is_registered'])
 		redirect(append_sid("{$phpbb_root_path}index.$phpEx"));
 	}
 
+	if ($id == 'pm' && $mode == 'view' && isset($_GET['p']))
+	{
+		$redirect_url = append_sid("{$phpbb_root_path}ucp.$phpEx?i=pm&p=" . $request->variable('p', 0));
+		login_box($redirect_url, $user->lang['LOGIN_EXPLAIN_UCP']);
+	}
+
 	login_box('', $user->lang['LOGIN_EXPLAIN_UCP']);
 }
 
@@ -329,19 +326,19 @@ if ($module->is_active('zebra', 'friends'))
 	// Output listing of friends online
 	$update_time = $config['load_online_time'] * 60;
 
-	$sql = $db->sql_build_query('SELECT_DISTINCT', array(
+	$sql_ary = array(
 		'SELECT'	=> 'u.user_id, u.username, u.username_clean, u.user_colour, MAX(s.session_time) as online_time, MIN(s.session_viewonline) AS viewonline',
 
 		'FROM'		=> array(
 			USERS_TABLE		=> 'u',
-			ZEBRA_TABLE		=> 'z'
+			ZEBRA_TABLE		=> 'z',
 		),
 
 		'LEFT_JOIN'	=> array(
 			array(
 				'FROM'	=> array(SESSIONS_TABLE => 's'),
-				'ON'	=> 's.session_user_id = z.zebra_id'
-			)
+				'ON'	=> 's.session_user_id = z.zebra_id',
+			),
 		),
 
 		'WHERE'		=> 'z.user_id = ' . $user->data['user_id'] . '
@@ -351,8 +348,9 @@ if ($module->is_active('zebra', 'friends'))
 		'GROUP_BY'	=> 'z.zebra_id, u.user_id, u.username_clean, u.user_colour, u.username',
 
 		'ORDER_BY'	=> 'u.username_clean ASC',
-	));
+	);
 
+	$sql = $db->sql_build_query('SELECT_DISTINCT', $sql_ary);
 	$result = $db->sql_query($sql);
 
 	while ($row = $db->sql_fetchrow($result))
@@ -377,11 +375,17 @@ if (!$config['allow_topic_notify'] && !$config['allow_forum_notify'])
 	$module->set_display('main', 'subscribed', false);
 }
 
-// Do not display signature panel if not authed to do so
-if (!$auth->acl_get('u_sig'))
-{
-	$module->set_display('profile', 'signature', false);
-}
+/**
+* Use this event to enable and disable additional UCP modules
+*
+* @event core.ucp_display_module_before
+* @var	p_master	module	Object holding all modules and their status
+* @var	mixed		id		Active module category (can be the int or string)
+* @var	string		mode	Active module
+* @since 3.1.0-a1
+*/
+$vars = array('module', 'id', 'mode');
+extract($phpbb_dispatcher->trigger_event('core.ucp_display_module_before', compact($vars)));
 
 // Select the active module
 $module->set_active($id, $mode);
@@ -393,26 +397,4 @@ $module->load_active();
 $module->assign_tpl_vars(append_sid("{$phpbb_root_path}ucp.$phpEx"));
 
 // Generate the page, do not display/query online list
-$module->display($module->get_page_title(), false);
-
-/**
-* Function for assigning a template var if the zebra module got included
-*/
-function _module_zebra($mode, &$module_row)
-{
-	global $template;
-
-	$template->assign_var('S_ZEBRA_ENABLED', true);
-
-	if ($mode == 'friends')
-	{
-		$template->assign_var('S_ZEBRA_FRIENDS_ENABLED', true);
-	}
-
-	if ($mode == 'foes')
-	{
-		$template->assign_var('S_ZEBRA_FOES_ENABLED', true);
-	}
-}
-
-?>
+$module->display($module->get_page_title());

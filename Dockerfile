@@ -12,4 +12,7 @@ RUN mv /var/www/html/config.php.docker /var/www/html/config.php
 
 RUN mkdir -p /var/www/html/cache \
   && chmod 770 /var/www/html/cache \
-  && chown www-data:www-data /var/www/html/cache
+  && chown www-data:www-data /var/www/html/cache \
+  && mkdir -p /var/www/html/store \
+  && chmod 770 /var/www/html/store \
+  && chown www-data:www-data /var/www/html/store \

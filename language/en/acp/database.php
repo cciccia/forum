@@ -1,12 +1,13 @@
 <?php
 /**
 *
-* acp_database [English]
+* This file is part of the phpBB Forum Software package.
 *
-* @package language
-* @version $Id$
-* @copyright (c) 2005 phpBB Group
-* @license http://opensource.org/licenses/gpl-license.php GNU Public License
+* @copyright (c) phpBB Limited <https://www.phpbb.com>
+* @license GNU General Public License, version 2 (GPL-2.0)
+*
+* For full copyright and license information, please see
+* the docs/CREDITS.txt file.
 *
 */
 
@@ -59,6 +60,7 @@ $lang = array_merge($lang, array(
 
 	'RESTORE_FAILURE'		=> 'The backup file may be corrupt.',
 	'RESTORE_OPTIONS'		=> 'Restore options',
+	'RESTORE_SELECTED_BACKUP'	=> 'Are you sure you want to restore the selected backup?',
 	'RESTORE_SUCCESS'		=> 'The database has been successfully restored.<br /><br />Your board should be back to the state it was when the backup was made.',
 
 	'SELECT_ALL'			=> 'Select all',
@@ -72,5 +74,3 @@ $lang = array_merge($lang, array(
 	'TABLE_SELECT'		=> 'Table select',
 	'TABLE_SELECT_ERROR'=> 'You must select at least one table.',
 ));
-
-?>

@@ -1,10 +1,13 @@
 <?php
 /**
 *
-* @package phpBB3
-* @version $Id$
-* @copyright (c) 2005 phpBB Group
-* @license http://opensource.org/licenses/gpl-license.php GNU Public License
+* This file is part of the phpBB Forum Software package.
+*
+* @copyright (c) phpBB Limited <https://www.phpbb.com>
+* @license GNU General Public License, version 2 (GPL-2.0)
+*
+* For full copyright and license information, please see
+* the docs/CREDITS.txt file.
 *
 */
 
@@ -18,7 +21,6 @@ if (!defined('IN_PHPBB'))
 
 /**
 * BBCode class
-* @package phpBB3
 */
 class bbcode
 {
@@ -30,7 +32,6 @@ class bbcode
 	var $bbcodes = array();
 
 	var $template_bitfield;
-	var $template_filename = '';
 
 	/**
 	* Constructor
@@ -108,7 +109,19 @@ class bbcode
 							$message = str_replace(array('&#58;', '&#46;'), array(':', '.'), $message);
 							$undid_bbcode_specialchars = true;
 						}
-						$message = preg_replace($preg['search'], $preg['replace'], $message);
+
+						foreach ($preg['search'] as $key => $search)
+						{
+							if (is_callable($preg['replace'][$key]))
+							{
+								$message = preg_replace_callback($search, $preg['replace'][$key], $message);
+							}
+							else
+							{
+								$message = preg_replace($search, $preg['replace'][$key], $message);
+							}
+						}
+
 						$preg = array('search' => array(), 'replace' => array());
 					}
 				}
@@ -127,28 +140,35 @@ class bbcode
 	*/
 	function bbcode_cache_init()
 	{
-		global $phpbb_root_path, $template, $user;
+		global $user, $phpbb_dispatcher, $phpbb_extension_manager, $phpbb_container, $phpbb_filesystem;
 
 		if (empty($this->template_filename))
 		{
-			$this->template_bitfield = new bitfield($user->theme['bbcode_bitfield']);
-			$this->template_filename = $phpbb_root_path . 'styles/' . $user->theme['template_path'] . '/template/bbcode.html';
+			$this->template_bitfield = new bitfield($user->style['bbcode_bitfield']);
 
-			if (!@file_exists($this->template_filename))
-			{
-				if (isset($user->theme['template_inherits_id']) && $user->theme['template_inherits_id'])
-				{
-					$this->template_filename = $phpbb_root_path . 'styles/' . $user->theme['template_inherit_path'] . '/template/bbcode.html';
-					if (!@file_exists($this->template_filename))
-					{
-						trigger_error('The file ' . $this->template_filename . ' is missing.', E_USER_ERROR);
-					}
-				}
-				else
-				{
-					trigger_error('The file ' . $this->template_filename . ' is missing.', E_USER_ERROR);
-				}
-			}
+			$template = new \phpbb\template\twig\twig(
+				$phpbb_container->get('path_helper'),
+				$phpbb_container->get('config'),
+				new \phpbb\template\context(),
+				new \phpbb\template\twig\environment(
+					$phpbb_container->get('config'),
+					$phpbb_container->get('filesystem'),
+					$phpbb_container->get('path_helper'),
+					$phpbb_container->getParameter('core.cache_dir'),
+					$phpbb_container->get('ext.manager'),
+					new \phpbb\template\twig\loader(
+						$phpbb_filesystem
+					)
+				),
+				$phpbb_container->getParameter('core.cache_dir'),
+				$phpbb_container->get('user'),
+				$phpbb_container->get('template.twig.extensions.collection'),
+				$phpbb_extension_manager
+			);
+
+			$template->set_style();
+			$template->set_filenames(array('bbcode.html' => 'bbcode.html'));
+			$this->template_filename = $template->get_source_file_for_handle('bbcode.html');
 		}
 
 		$bbcode_ids = $rowset = $sql = array();
@@ -192,22 +212,31 @@ class bbcode
 			$db->sql_freeresult($result);
 		}
 
+		// To perform custom second pass in extension, use $this->bbcode_second_pass_by_extension()
+		// method which accepts variable number of parameters
 		foreach ($bbcode_ids as $bbcode_id)
 		{
 			switch ($bbcode_id)
 			{
-				case 0:
+				case BBCODE_ID_QUOTE:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'str' => array(
 							'[/quote:$uid]'	=> $this->bbcode_tpl('quote_close', $bbcode_id)
 						),
 						'preg' => array(
-							'#\[quote(?:=&quot;(.*?)&quot;)?:$uid\]((?!\[quote(?:=&quot;.*?&quot;)?:$uid\]).)?#ise'	=> "\$this->bbcode_second_pass_quote('\$1', '\$2')"
+							'#\[quote(?:=&quot;(.*?)&quot;)?:$uid\]((?!\[quote(?:=&quot;.*?&quot;)?:$uid\]).)?#is'	=> function ($match) {
+								if (!isset($match[2]))
+								{
+									$match[2] = '';
+								}
+
+								return $this->bbcode_second_pass_quote($match[1], $match[2]);
+							},
 						)
 					);
 				break;
 
-				case 1:
+				case BBCODE_ID_B:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'str' => array(
 							'[b:$uid]'	=> $this->bbcode_tpl('b_open', $bbcode_id),
@@ -216,7 +245,7 @@ class bbcode
 					);
 				break;
 
-				case 2:
+				case BBCODE_ID_I:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'str' => array(
 							'[i:$uid]'	=> $this->bbcode_tpl('i_open', $bbcode_id),
@@ -225,7 +254,7 @@ class bbcode
 					);
 				break;
 
-				case 3:
+				case BBCODE_ID_URL:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
 							'#\[url:$uid\]((.*?))\[/url:$uid\]#s'			=> $this->bbcode_tpl('url', $bbcode_id),
@@ -234,7 +263,7 @@ class bbcode
 					);
 				break;
 
-				case 4:
+				case BBCODE_ID_IMG:
 					if ($user->optionget('viewimg'))
 					{
 						$this->bbcode_cache[$bbcode_id] = array(
@@ -253,7 +282,7 @@ class bbcode
 					}
 				break;
 
-				case 5:
+				case BBCODE_ID_SIZE:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
 							'#\[size=([\-\+]?\d+):$uid\](.*?)\[/size:$uid\]#s'	=> $this->bbcode_tpl('size', $bbcode_id),
@@ -261,7 +290,7 @@ class bbcode
 					);
 				break;
 
-				case 6:
+				case BBCODE_ID_COLOR:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
 							'!\[color=(#[0-9a-f]{3}|#[0-9a-f]{6}|[a-z\-]+):$uid\](.*?)\[/color:$uid\]!is'	=> $this->bbcode_tpl('color', $bbcode_id),
@@ -269,7 +298,7 @@ class bbcode
 					);
 				break;
 
-				case 7:
+				case BBCODE_ID_U:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'str' => array(
 							'[u:$uid]'	=> $this->bbcode_tpl('u_open', $bbcode_id),
@@ -278,20 +307,24 @@ class bbcode
 					);
 				break;
 
-				case 8:
+				case BBCODE_ID_CODE:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
-							'#\[code(?:=([a-z]+))?:$uid\](.*?)\[/code:$uid\]#ise'	=> "\$this->bbcode_second_pass_code('\$1', '\$2')",
+							'#\[code(?:=([a-z]+))?:$uid\](.*?)\[/code:$uid\]#is'	=> function ($match) {
+								return $this->bbcode_second_pass_code($match[1], $match[2]);
+							},
 						)
 					);
 				break;
 
-				case 9:
+				case BBCODE_ID_LIST:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
 							'#(\[\/?(list|\*):[mou]?:?$uid\])[\n]{1}#'	=> "\$1",
 							'#(\[list=([^\[]+):$uid\])[\n]{1}#'			=> "\$1",
-							'#\[list=([^\[]+):$uid\]#e'					=> "\$this->bbcode_list('\$1')",
+							'#\[list=([^\[]+):$uid\]#'					=> function ($match) {
+								return $this->bbcode_list($match[1]);
+							},
 						),
 						'str' => array(
 							'[list:$uid]'		=> $this->bbcode_tpl('ulist_open_default', $bbcode_id),
@@ -304,7 +337,7 @@ class bbcode
 					);
 				break;
 
-				case 10:
+				case BBCODE_ID_EMAIL:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'preg' => array(
 							'#\[email:$uid\]((.*?))\[/email:$uid\]#is'			=> $this->bbcode_tpl('email', $bbcode_id),
@@ -313,7 +346,7 @@ class bbcode
 					);
 				break;
 
-				case 11:
+				case BBCODE_ID_FLASH:
 					if ($user->optionget('viewflash'))
 					{
 						$this->bbcode_cache[$bbcode_id] = array(
@@ -332,7 +365,7 @@ class bbcode
 					}
 				break;
 
-				case 12:
+				case BBCODE_ID_ATTACH:
 					$this->bbcode_cache[$bbcode_id] = array(
 						'str'	=> array(
 							'[/attachment:$uid]'	=> $this->bbcode_tpl('inline_attachment_close', $bbcode_id)
@@ -341,31 +374,8 @@ class bbcode
 							'#\[attachment=([0-9]+):$uid\]#'	=> $this->bbcode_tpl('inline_attachment_open', $bbcode_id)
 						)
 					);
-
-				case 1450:
-				    $this->bbcode_cache[$bbcode_id] = array(
-					'preg' => array(
-					    '#\[countdown:$uid\](\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d) ?(-?\d{1,2}\.\d{1,2})?\[/countdown:$uid\]#ise'    => "\$this->bbcode_second_pass_countdown('\$1','\$2','\$3','\$4','\$5','\$6','\$7')",
-					)
-				    );
 				break;
 
-				case 1451:
-				    $this->bbcode_cache[$bbcode_id] = array(
-					'preg' => array(
-					    '#\[dice:$uid\](\d+)d(\d+)(?:([\+-\/\*])(\d+))? ?((:?<!--)?\d+(:?-->)?)\[/dice:$uid\]#ise'    => "\$this->bbcode_second_pass_dice('\$1','\$2','\$5','\$3','\$4')",
-					)
-				    );
-				break;
-				
-				case 1452:
-					$this->bbcode_cache[$bbcode_id] = array(
-						'preg' => array(
-							'#\[post=\#(\d+):$uid\](.*?)\[/post:$uid\]#ise'	=>
-							"\$this->bbcode_second_pass_post('\$1','\$2')",
-						)
-					);
-				break;
 				default:
 					if (isset($rowset[$bbcode_id]))
 					{
@@ -398,7 +408,9 @@ class bbcode
 						}
 
 						// Replace {L_*} lang strings
-						$bbcode_tpl = preg_replace('/{L_([A-Z_]+)}/e', "(!empty(\$user->lang['\$1'])) ? \$user->lang['\$1'] : ucwords(strtolower(str_replace('_', ' ', '\$1')))", $bbcode_tpl);
+						$bbcode_tpl = preg_replace_callback('/{L_([A-Z0-9_]+)}/', function ($match) use ($user) {
+							return (!empty($user->lang[$match[1]])) ? $user->lang($match[1]) : ucwords(strtolower(str_replace('_', ' ', $match[1])));
+						}, $bbcode_tpl);
 
 						if (!empty($rowset[$bbcode_id]['second_pass_replace']))
 						{
@@ -421,6 +433,26 @@ class bbcode
 				break;
 			}
 		}
+
+		$bbcode_cache = $this->bbcode_cache;
+		$bbcode_bitfield = $this->bbcode_bitfield;
+		$bbcode_uid = $this->bbcode_uid;
+
+		/**
+		* Use this event to modify the bbcode_cache
+		*
+		* @event core.bbcode_cache_init_end
+		* @var	array	bbcode_cache		The array of cached search and replace patterns of bbcodes
+		* @var	string	bbcode_bitfield		The bbcode bitfield
+		* @var	string	bbcode_uid			The bbcode uid
+		* @since 3.1.3-RC1
+		*/
+		$vars = array('bbcode_cache', 'bbcode_bitfield', 'bbcode_uid');
+		extract($phpbb_dispatcher->trigger_event('core.bbcode_cache_init_end', compact($vars)));
+
+		$this->bbcode_cache = $bbcode_cache;
+		$this->bbcode_bitfield = $bbcode_bitfield;
+		$this->bbcode_uid = $bbcode_uid;
 	}
 
 	/**
@@ -434,15 +466,15 @@ class bbcode
 			global $user;
 
 			$bbcode_hardtpl = array(
-				'b_open'	=> !$user->optionget('sigbb_disabled')? '<span class="noboldsig">' :'<span style="font-weight: bold">',
+				'b_open'	=> '<span style="font-weight: bold">',
 				'b_close'	=> '</span>',
 				'i_open'	=> '<span style="font-style: italic">',
 				'i_close'	=> '</span>',
 				'u_open'	=> '<span style="text-decoration: underline">',
 				'u_close'	=> '</span>',
-				'img'		=> '<img src="$1" alt="' . $user->lang['IMAGE'] . '" />',
+				'img'		=> '<img src="$1" class="postimage" alt="' . $user->lang['IMAGE'] . '" />',
 				'size'		=> '<span style="font-size: $1%; line-height: normal">$2</span>',
-				'color'		=> !$user->optionget('sigbb_disabled') ? '<span style="color: $1"><span class="nocolorsig" >$2</span></span>' : '<span style="color: $1">$2</span>',
+				'color'		=> '<span style="color: $1">$2</span>',
 				'email'		=> '<a href="mailto:$1">$2</a>'
 			);
 		}
@@ -502,7 +534,9 @@ class bbcode
 			'email'					=> array('{EMAIL}'		=> '$1', '{DESCRIPTION}'	=> '$2')
 		);
 
-		$tpl = preg_replace('/{L_([A-Z_]+)}/e', "(!empty(\$user->lang['\$1'])) ? \$user->lang['\$1'] : ucwords(strtolower(str_replace('_', ' ', '\$1')))", $tpl);
+		$tpl = preg_replace_callback('/{L_([A-Z0-9_]+)}/', function ($match) use ($user) {
+			return (!empty($user->lang[$match[1]])) ? $user->lang($match[1]) : ucwords(strtolower(str_replace('_', ' ', $match[1])));
+		}, $tpl);
 
 		if (!empty($replacements[$tpl_name]))
 		{
@@ -607,11 +641,13 @@ class bbcode
 				$code = str_replace('  ', '&nbsp; ', $code);
 				$code = str_replace('  ', ' &nbsp;', $code);
 				$code = str_replace("\n ", "\n&nbsp;", $code);
-				  // keep space at the beginning
-				  if (!empty($code) && $code[0] == ' ')
-				  {
-				      $code = '&nbsp;' . substr($code, 1);
-				  }
+
+				// keep space at the beginning
+				if (!empty($code) && $code[0] == ' ')
+				{
+					$code = '&nbsp;' . substr($code, 1);
+				}
+
 				// remove newline at the beginning
 				if (!empty($code) && $code[0] == "\n")
 				{
@@ -624,118 +660,36 @@ class bbcode
 
 		return $code;
 	}
-	/**
-	 * Second parse of Post Tag
-	 *
-	 * Argument is the post in the current thread
-	 *
-	 */
-	function bbcode_second_pass_post($post_id, $content)
-	{
-		global $config;
-		return "<a class='postlink post_tag' href=" . '"' . $config['server_protocol'] . $config['server_name'] . $config['script_path'] . "/viewtopic.php?p=$post_id#p$post_id" . '"' . ">" . $content . "</a>";
-	}
-	/**
-	 * Second parse countdown tag
-	 *
-	 * Each argument is a component of the countdown tag's 'deadline'.
-	 */
-	function bbcode_second_pass_countdown($year, $month, $day, $hour, $minute, $second, $timezone)
-	{
-		global $config;
-		$displayBuffer = "";
-
-		if($timezone == '') {
-			$gmtOffset = (-5 * 3600) + (1 * 3600);//central standard time / eastern daylight time
-		}
-		else {
-			$gmtOffset = (float)$timezone * 3600;
-		}
-		
-		$timeNow = gmdate("U") + $gmtOffset;
-		$timeDeadline = gmmktime($hour, $minute, $second, $month, $day, $year);
-		$timeDiff = $timeDeadline - $timeNow;
-
-		//The 'deadline' has been reached.
-		if( $timeDiff <= 0 ) {
-			
-			$displayBuffer = "<span style='font-style:italic;'>(expired on " . gmstrftime("%Y-%m-%d %H:%M:%S", $timeDeadline) . ")</span>";
-//			$displayBuffer = "The countdown has expired";
-		}
-		else
-		{//There is still time remaining.
-			$days    = (int) ($timeDiff / 60 / 60 / 24);
-			$hours   = (int) (($timeDiff / 60 / 60) % 24);
-			$minutes = (int) (($timeDiff / 60) % 60);
-			$seconds = (int) ($timeDiff % 60);
-			$displayBuffer	=        "$days day"       . ($days    == 1 ? "" : "s") . ", "
-					.        "$hours hour"     . ($hours   == 1 ? "" : "s") . ", "
-					.        "$minutes minute" . ($minutes == 1 ? "" : "s");
-		}
-
-//		$cdIdentifier = uniqid();
-//		return '<span class="countdown" id="'.$cdIdentifier.'">"'.$displayBuffer.'"</span><script type="text/javascript">countdownJS('.$year.','.$month.','.$day.','.$hour.','.$minute.','.$second.', "'.$cdIdentifier.'");</script>';
-
-		return "<span class='countdown'>" . $displayBuffer . "</span>";
-	}
 
 	/**
-	 * Second parse dice tag
-	 *
-	 */
-	function bbcode_second_pass_dice($dice, $sides, $seed, $operator, $operand)
+	* Function to perform custom bbcode second pass by extensions
+	* can be used to assign bbcode pattern replacement
+	* Example: '#\[list=([^\[]+):$uid\]#e'	=> "\$this->bbcode_second_pass_by_extension('\$1')"
+	*
+	* Accepts variable number of parameters
+	*
+	* @return mixed Second pass result
+	*/
+	function bbcode_second_pass_by_extension()
 	{
-		$total = 0;
-		$fixed = False;
+		global $phpbb_dispatcher;
 
-		if($seed != '' && $seed{0} == '<') {
+		$return = false;
+		$params_array = func_get_args();
 
-			$seed = preg_replace('/<!--(\d+)-->/', '$1', $seed);
-		}
-		else {
+		/**
+		* Event to perform bbcode second pass with
+		* the custom validating methods provided by extensions
+		*
+		* @event core.bbcode_second_pass_by_extension
+		* @var array	params_array	Array with the function parameters
+		* @var mixed	return			Second pass result to return
+		*
+		* @since 3.1.5-RC1
+		*/
+		$vars = array('params_array', 'return');
+		extract($phpbb_dispatcher->trigger_event('core.bbcode_second_pass_by_extension', compact($vars)));
 
-			$fixed = True;
-		}
-
-		$sides = (int)$sides;
-		$dice = (int)$dice;
-		$seed = (int)$seed;
-
-		mt_srand($seed);
-
-		$buffer = '<div class="dicebox"><div class="dicetop"><emph>Original Roll String:</emph> ' . $dice . 'd' . $sides . (($operator != '' && $operand) != '' ? ($operator . $operand) : '') . ($fixed==True ? ' <fixed>(STATIC)</fixed>' : '') . '</div>'
-		.      '<div class="diceroll"><emph>' . $dice . ' ' . $sides . '-Sided Dice:</emph> (';
-
-		for($diceCounter = 0;$diceCounter < $dice;++$diceCounter) {
-
-			$roll = mt_rand(1, $sides);
-			$total += $roll;
-
-			if($diceCounter > 0) {
-				
-				$buffer .= ', ';
-			}
-
-			$buffer .= $roll;
-		}
-
-		if($operator == '+')
-			$total += $operand;
-		else if($operator == '-')
-			$total -= $operand;
-		else if($operator == '*')
-			$total *= $operand;
-		else if($operator == '/') {
-			if($operand == 0)
-				$total = "INVALID";
-			else
-				$total /= $operand;
-		}
-
-		$buffer .= ')' . ($operator != '' && $operand != '' ? ($operator . $operand) : '') . ' = ' . $total . '</div></div>';
-
-		return $buffer;
+		return $return;
 	}
 }
-
-?>
