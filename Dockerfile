@@ -1,18 +1,8 @@
-FROM php:5.6.31-apache
+FROM selim13/phpbb:3.2-apache
 
-RUN apt-get update \
-  && DEBIAN_FRONTEND=noninteractive apt-get install -y imagemagick libpng-dev
-RUN a2enmod rewrite
-RUN docker-php-ext-install mysqli
-RUN docker-php-ext-install gd
+ENV PHPBB_INSTALL false
+ENV PHPBB_DB_DRIVER mysqli
 
-ADD . /var/www/html/
-
-RUN mv /var/www/html/config.php.docker /var/www/html/config.php
-
-RUN mkdir -p /var/www/html/cache \
-  && chmod 770 /var/www/html/cache \
-  && chown www-data:www-data /var/www/html/cache \
-  && mkdir -p /var/www/html/store \
-  && chmod 770 /var/www/html/store \
-  && chown www-data:www-data /var/www/html/store \
+ADD ./config.php.docker /phpbb/www/config.php
+ADD ./images /phpbb/www/images
+ADD ./valentines_images /phpbb/www/valentines_images
