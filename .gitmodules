@@ -1,0 +1,3 @@
+[submodule "ext/mafiascum/private-topics"]
+	path = ext/mafiascum/private-topics
+	url = https://github.com/mafiascum/extensions-private-topics.git
